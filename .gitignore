@@ -1,0 +1,33 @@
+# Credentials — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+token.json
+
+# Snapshots contain subscriber email addresses (PII)
+snapshots/
+*.snapshot.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.python-version
+uv.lock
+
+# Tooling / OS
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.DS_Store
+.idea/
+.vscode/
