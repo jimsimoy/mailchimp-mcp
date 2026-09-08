@@ -38,8 +38,8 @@ def test_clean_params_drops_empty_and_flattens_lists():
     }
 
 
-def test_marketing_client_has_no_write_methods(settings):
-    """The read-only guarantee: there is nothing to call that mutates data."""
+def test_marketing_client_exposes_no_convenience_write_methods(settings):
+    """Writes must go through request(), which is where the access gate lives."""
     for verb in ("post", "put", "patch", "delete"):
         assert not hasattr(MarketingClient, verb)
 

@@ -14,6 +14,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from .access import AccessLevel
+
 #: Mailchimp datacenter suffixes look like "us13", "us1", "eu1".
 _DATACENTER_RE = re.compile(r"^[a-z]{2}\d{1,3}$")
 
@@ -76,6 +78,8 @@ class Settings:
     snapshot_dir: Path = Path("snapshots")
     timeout: float = 30.0
     max_records: int = 5000
+    access_level: AccessLevel = AccessLevel.READONLY
+    tool_groups: frozenset[str] | None = None
 
     @property
     def base_url(self) -> str:
@@ -84,6 +88,10 @@ class Settings:
     @property
     def transactional_enabled(self) -> bool:
         return bool(self.transactional_api_key)
+
+    @property
+    def allowed_methods(self) -> frozenset[str]:
+        return self.access_level.methods
 
     def redact(self, text: str) -> str:
         """Strip any credential that leaked into a message."""
@@ -132,6 +140,18 @@ def load_settings(env_file: str | os.PathLike[str] | None = None) -> Settings:
         os.environ.get("MAILCHIMP_SNAPSHOT_DIR", "").strip() or "snapshots"
     ).expanduser()
 
+    try:
+        access_level = AccessLevel.parse(os.environ.get("MAILCHIMP_ACCESS_LEVEL"))
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+
+    groups_raw = os.environ.get("MAILCHIMP_TOOL_GROUPS", "").strip()
+    tool_groups = (
+        frozenset(g.strip().lower() for g in groups_raw.split(",") if g.strip()) or None
+        if groups_raw
+        else None
+    )
+
     return Settings(
         api_key=raw_key,
         datacenter=datacenter,
@@ -140,4 +160,6 @@ def load_settings(env_file: str | os.PathLike[str] | None = None) -> Settings:
         snapshot_dir=snapshot_dir,
         timeout=_env_float("MAILCHIMP_TIMEOUT", 30.0),
         max_records=_env_int("MAILCHIMP_MAX_RECORDS", 5000),
+        access_level=access_level,
+        tool_groups=tool_groups,
     )

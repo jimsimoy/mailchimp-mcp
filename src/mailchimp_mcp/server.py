@@ -10,7 +10,8 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
-from . import __version__, analysis
+from . import __version__, analysis, generated
+from .access import AccessDenied, AccessLevel, DESCRIPTIONS
 from .client import MailchimpError, MarketingClient, TransactionalClient, subscriber_hash
 from .config import ConfigError, Settings, load_settings
 
@@ -29,7 +30,7 @@ def handled(func: _F) -> _F:
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         try:
             return func(*args, **kwargs)
-        except MailchimpError as exc:
+        except (MailchimpError, AccessDenied) as exc:
             raise ToolError(str(exc)) from exc
         except (ConfigError, analysis.AnalysisError, ValueError) as exc:
             raise ToolError(settings_safe_message(exc)) from exc
@@ -55,7 +56,13 @@ mcp = MCPServer(
         "'Non-subscribed'. Mailchimp stores no subscribe-status history, so use "
         "find_newly_subscribed to infer past status changes from opt-in timestamps, "
         "and snapshot_member_statuses + diff_member_status_snapshots to track them "
-        "exactly from now on."
+        "exactly from now on. Alongside these curated tools, one tool is exposed per "
+        "Mailchimp API operation, named after its operationId (for example "
+        "get_lists_id_members). Which of those exist depends on MAILCHIMP_ACCESS_LEVEL: "
+        "READONLY registers only GET operations, BASIC adds POST, ADMIN adds "
+        "PUT/PATCH/DELETE. Tools above the configured level are not registered at all, "
+        "so if you cannot see a write tool, the operator has not granted that access — "
+        "say so rather than looking for a workaround."
     ),
 )
 
@@ -709,13 +716,66 @@ def transactional_search_messages(
 # =========================================================================== #
 
 
+#: The hand-written tools above. Declared explicitly rather than introspected so
+#: that name clashes with the generated tools are caught by a test, not at runtime.
+CURATED_TOOL_NAMES = frozenset(
+    {
+        "ping",
+        "get_account",
+        "list_audiences",
+        "get_audience",
+        "get_audience_growth_history",
+        "get_audience_activity",
+        "list_members",
+        "get_member",
+        "get_member_activity",
+        "get_member_tags",
+        "search_members",
+        "list_segments",
+        "list_segment_members",
+        "list_merge_fields",
+        "list_campaigns",
+        "get_campaign_report",
+        "list_campaign_reports",
+        "get_campaign_unsubscribes",
+        "find_newly_subscribed",
+        "snapshot_member_statuses",
+        "list_status_snapshots",
+        "diff_member_status_snapshots",
+        "transactional_account_info",
+        "transactional_search_messages",
+    }
+)
+
+
+def register_generated_tools() -> dict[str, Any]:
+    """Expose one tool per Mailchimp API operation, filtered by access level."""
+    return generated.register(mcp, settings(), marketing, reserved=set(CURATED_TOOL_NAMES))
+
+
 def main() -> None:
     """Entry point for the ``mailchimp-mcp`` console script."""
     try:
-        load_settings()
+        current = load_settings()
     except ConfigError as exc:
         print(f"mailchimp-mcp: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
+
+    summary = register_generated_tools()
+    total = len(CURATED_TOOL_NAMES) + summary["registered"]
+    print(
+        f"mailchimp-mcp {__version__}: access level {current.access_level.value} "
+        f"({DESCRIPTIONS[current.access_level]}); {total} tools "
+        f"({len(CURATED_TOOL_NAMES)} curated + {summary['registered']} generated, "
+        f"{summary['skipped_above_access_level']} withheld above access level).",
+        file=sys.stderr,
+    )
+    if current.access_level is AccessLevel.ADMIN:
+        print(
+            "mailchimp-mcp: WARNING — ADMIN access is enabled. Tools that permanently "
+            "update and delete Mailchimp data are exposed to the model.",
+            file=sys.stderr,
+        )
     mcp.run()
 
 

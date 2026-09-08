@@ -1,12 +1,18 @@
 """HTTP clients for Mailchimp.
 
-Two deliberate constraints live here, and they are the whole security story of
-this project:
+Two deliberate constraints live here, and they are the security story of this
+project:
 
-1. :class:`MarketingClient` exposes **only** ``get``. There is no post/put/patch
-   /delete method to call, so no tool built on it can mutate your audience.
+1. :class:`MarketingClient` refuses any HTTP method the configured
+   :class:`~mailchimp_mcp.access.AccessLevel` does not permit. At the default
+   READONLY level the only method that will leave this process is GET, no matter
+   which tool is invoked or how it is invoked.
 2. :class:`TransactionalClient` speaks Mandrill's POST-only protocol, so it
-   guards itself with an explicit allowlist of read-only endpoints instead.
+   cannot be constrained by HTTP verb; it guards itself with an explicit
+   allowlist of read-only methods instead.
+
+This is the second of two independent gates. The first is in ``server.py``,
+which never registers a tool above the configured level.
 """
 
 from __future__ import annotations
@@ -18,6 +24,7 @@ from typing import Any, Mapping, Sequence
 
 import httpx
 
+from .access import AccessLevel, require
 from .config import Settings
 
 #: Endpoint paths are built by this package, never by the caller, but validate
@@ -26,6 +33,15 @@ _SAFE_PATH_RE = re.compile(r"^/[A-Za-z0-9._~%/-]*$")
 
 _RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 _MAX_ATTEMPTS = 4
+
+#: The access level each HTTP method requires. Mirrors tools/generate_operations.py.
+_METHOD_LEVEL = {
+    "GET": AccessLevel.READONLY,
+    "POST": AccessLevel.BASIC,
+    "PUT": AccessLevel.ADMIN,
+    "PATCH": AccessLevel.ADMIN,
+    "DELETE": AccessLevel.ADMIN,
+}
 
 #: Mandrill methods this server is permitted to call. Everything here is a read;
 #: sending, template edits and rejection-list writes are absent on purpose.
@@ -116,8 +132,31 @@ class MarketingClient:
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
+    @property
+    def access_level(self) -> AccessLevel:
+        return self._settings.access_level
+
     def get(self, path: str, params: Mapping[str, Any] | None = None) -> dict[str, Any]:
         """Issue one GET and return the decoded JSON body."""
+        return self.request("GET", path, params=params)
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        params: Mapping[str, Any] | None = None,
+        body: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Issue one request, after checking it against the configured access level.
+
+        This check is not a formality: it is what makes READONLY mean read-only
+        even if a caller reaches past the tool layer.
+        """
+        method = method.upper()
+        if method not in _METHOD_LEVEL:
+            raise ValueError(f"Unsupported HTTP method: {method!r}")
+        require(self._settings.access_level, _METHOD_LEVEL[method], f"{method} {path}")
+
         if not _SAFE_PATH_RE.match(path) or path.startswith("//"):
             raise ValueError(f"Refusing to request unsafe path: {path!r}")
 
@@ -125,14 +164,17 @@ class MarketingClient:
         last_error: MailchimpError | None = None
 
         for attempt in range(1, _MAX_ATTEMPTS + 1):
-            response = self._client.get(path, params=query)
+            response = self._client.request(method, path, params=query, json=body)
             if response.status_code < 400:
                 if not response.content:
                     return {}
                 return response.json()
 
             error = self._to_error(response)
-            if response.status_code not in _RETRY_STATUSES or attempt == _MAX_ATTEMPTS:
+            # Only GET is replayed. Retrying a POST/PATCH/DELETE could duplicate a
+            # write whose first attempt actually landed.
+            retryable = method == "GET" and response.status_code in _RETRY_STATUSES
+            if not retryable or attempt == _MAX_ATTEMPTS:
                 raise error
             last_error = error
             time.sleep(self._backoff(response, attempt))
