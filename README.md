@@ -19,6 +19,8 @@ by [Jan Ivan Simoy](https://github.com/jimsimoy)
 
 ---
 
+> **Unofficial.** This is an independent, community-built project — not affiliated with, endorsed by, or sponsored by Mailchimp.
+
 ## What is this?
 
 Mailchimp MCP is a [Model Context Protocol](https://modelcontextprotocol.io) server that gives AI assistants structured access to the [Mailchimp Marketing API](https://mailchimp.com/developer/marketing/api/) — audiences, contacts, segments and tags, campaigns, reports, automations, ecommerce stores, templates, landing pages and more.
